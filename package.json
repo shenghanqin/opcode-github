@@ -16,7 +16,17 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:dmg": "tauri build --bundles dmg",
-    "check": "tsc --noEmit && cd src-tauri && cargo check"
+    "check": "tsc --noEmit && cd src-tauri && cargo check",
+    "test": "npm run test:rust && npm run test:e2e",
+    "test:all": "npm run test:rust && npm run test:e2e",
+    "test:rust": "./scripts/test-rust.sh",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report",
+    "test:e2e:codegen": "playwright codegen http://localhost:1420",
+    "test:api": "playwright test e2e/tests/api/",
+    "test:bench": "cd src-tauri && cargo bench"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -63,6 +73,7 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.40.0",
     "@tauri-apps/cli": "^2.7.1",
     "@types/node": "^22.15.30",
     "@types/react": "^18.3.1",

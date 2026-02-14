@@ -7,6 +7,10 @@ pub mod commands;
 pub mod process;
 pub mod web_server;
 
+// 测试模块
+#[cfg(test)]
+mod tests;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
