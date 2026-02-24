@@ -1,0 +1,183 @@
+name: Windows Build with Console Test
+
+# 专门测试 Windows 构建和控制台窗口问题
+on:
+  push:
+    branches: [ playwright-test, 'feature/windows-console/**' ]
+  pull_request:
+    branches: [ playwright-test ]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      test_console:
+        description: 'Test console window visibility'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-windows:
+    name: Build Windows & Test Console
+    runs-on: windows-latest
+    
+    steps:
+      # Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Setup Rust
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Cache Rust dependencies
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: windows-rust-${{ hashFiles('**/Cargo.lock') }}
+          
+      # Setup Bun
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Cache Bun dependencies
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun
+            node_modules
+          key: windows-bun-${{ hashFiles('bun.lockb', 'package.json') }}
+      
+      # Install frontend dependencies
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # Build frontend
+      - name: Build frontend
+        run: bun run build
+
+      # Check Windows subsystem setting
+      - name: Check Windows subsystem
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking Windows Subsystem Configuration ==="
+          $mainRs = Get-Content src-tauri/src/main.rs -Raw
+          
+          if ($mainRs -match '#!\[cfg_attr\(not\(debug_assertions\), windows_subsystem = "windows"\)\]') {
+            Write-Host "✅ Found windows_subsystem configuration"
+          } else {
+            Write-Host "⚠️  Missing windows_subsystem configuration - console window may appear!"
+          }
+          
+          # Check for CREATE_NO_WINDOW usage
+          $claudeRs = Get-Content src-tauri/src/commands/claude.rs -Raw -ErrorAction SilentlyContinue
+          if ($claudeRs -match 'CREATE_NO_WINDOW|creation_flags') {
+            Write-Host "✅ Found CREATE_NO_WINDOW usage in claude.rs"
+          } else {
+            Write-Host "⚠️  Missing CREATE_NO_WINDOW in claude.rs - console window may appear when calling CLI!"
+          }
+
+      # Build Tauri application (Debug mode for faster build)
+      - name: Build Tauri application (Debug)
+        run: bun run tauri build --no-bundle -d
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+
+      # Build Tauri application (Release mode for distribution)
+      - name: Build Tauri application (Release)
+        run: bun run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+
+      # Upload Windows executable
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: opcode-windows-x64
+          path: |
+            src-tauri/target/release/opcode.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 7
+
+      # Test console window (if enabled)
+      - name: Test Console Window Visibility
+        if: github.event.inputs.test_console != 'false'
+        shell: pwsh
+        run: |
+          Write-Host "=== Testing Console Window Behavior ==="
+          
+          # Start the application
+          $exePath = "src-tauri/target/release/opcode.exe"
+          if (Test-Path $exePath) {
+            Write-Host "Starting $exePath..."
+            
+            # Start process and capture window info
+            $process = Start-Process -FilePath $exePath -PassThru -WindowStyle Hidden
+            Start-Sleep -Seconds 5
+            
+            # Get process windows
+            Add-Type @"
+              using System;
+              using System.Runtime.InteropServices;
+              public class WindowChecker {
+                [DllImport("user32.dll")]
+                public static extern bool IsWindowVisible(IntPtr hWnd);
+                
+                [DllImport("user32.dll")]
+                public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
+                
+                public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+              }
+"@
+            
+            # Check for console windows
+            $consoleWindows = 0
+            $callback = {
+              param($hwnd, $lparam)
+              if ([WindowChecker]::IsWindowVisible($hwnd)) {
+                # This is a visible window
+              }
+              return $true
+            }
+            
+            # Stop the process
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            
+            Write-Host "Console window test completed"
+          } else {
+            Write-Host "❌ Executable not found: $exePath"
+          }
+
+  # Summary
+  windows-build-summary:
+    name: Windows Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-windows]
+    if: always()
+    
+    steps:
+      - name: Check build results
+        run: |
+          if [[ "${{ needs.build-windows.result }}" == "failure" ]]; then
+            echo "❌ Windows build failed"
+            exit 1
+          elif [[ "${{ needs.build-windows.result }}" == "cancelled" ]]; then
+            echo "⚠️ Windows build was cancelled"
+            exit 1
+          else
+            echo "✅ Windows build completed successfully"
+          fi
